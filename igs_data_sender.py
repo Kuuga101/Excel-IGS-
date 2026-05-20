@@ -1,17 +1,22 @@
 import pandas as pd
 import time
+import sys
 from opcua import Client
 from opcua.ua import DataValue, Variant, VariantType
 import os
 import threading
 import tkinter as tk
-from tkinter import scrolledtext
-from tkinter import messagebox
+from tkinter import scrolledtext, filedialog, messagebox
 
 stop_flag = False
 pause_flag = False
 running = True
 auto_scroll = True
+
+if getattr(sys, "frozen", False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def on_text_scroll(*args):
@@ -25,11 +30,9 @@ def log(msg):
 
         def update():
             text_area.insert(tk.END, msg + "\n")
-
             lines = text_area.get("1.0", tk.END).count("\n")
             if lines > 1000:
                 text_area.delete("1.0", f"{lines - 1000 + 1}.0")
-
             if auto_scroll:
                 text_area.see(tk.END)
 
@@ -46,18 +49,19 @@ def check_control_files():
 
 
 def run_task():
-    global START_ROW, stop_flag, pause_flag, running, client, data_df, tag_columns
+    global START_ROW, stop_flag, pause_flag
+
+    channel = entry_channel.get().strip() or CHANNEL_NAME
+    device = entry_device.get().strip() or DEVICE_NAME
 
     try:
         log(f"数据列: {tag_columns}")
         log(f"总行数: {len(data_df)}")
         log(f"从第 {START_ROW + 1} 行开始输入\n")
-        log("控制方式: stop.txt=停止, pause.txt=暂停\n")
+        log("控制方式: stop.txt=停止, 暂停按钮=暂停\n")
 
         control_thread = threading.Thread(target=check_control_files, daemon=True)
         control_thread.start()
-
-        log("控制方式: stop.txt=停止, 暂停按钮=暂停\n")
 
         while running:
             if stop_flag:
@@ -83,7 +87,7 @@ def run_task():
 
             for tag in tag_columns:
                 value = row[tag]
-                node_id = f"ns=2;s={CHANNEL_NAME}.{DEVICE_NAME}.{tag}"
+                node_id = f"ns=2;s={channel}.{device}.{tag}"
 
                 try:
                     if tag in ["IsWork_1"]:
@@ -138,16 +142,30 @@ data_df = None
 tag_columns = []
 
 OPC_UA_SERVER_URL = "opc.tcp://127.0.0.1:49310"
-CHANNEL_NAME = "模拟数据"
-DEVICE_NAME = "PAC"
-EXCEL_FILE = "PAC数据.xlsx"
+CHANNEL_NAME = "PAC"
+DEVICE_NAME = "PLC"
+SELECTED_FILE = ""
+
+
+def select_excel():
+    global SELECTED_FILE
+    file_path = filedialog.askopenfilename(
+        title="选择Excel文件",
+        initialdir=BASE_DIR,
+        filetypes=[("Excel文件", "*.xlsx *.xls")],
+    )
+    if file_path:
+        SELECTED_FILE = file_path
+        lbl_file.config(text=os.path.basename(file_path))
+        log(f"已选择文件: {file_path}")
+        threading.Thread(target=init_connection, daemon=True).start()
 
 
 def init_connection():
     global client, data_df, tag_columns
     try:
         log("正在读取Excel文件...")
-        data_df = pd.read_excel(EXCEL_FILE)
+        data_df = pd.read_excel(SELECTED_FILE)
         tag_columns = [col for col in data_df.columns if col not in ["id", "datetime"]]
         log(f"Excel读取完成，共 {len(data_df)} 行")
 
@@ -165,16 +183,40 @@ def init_connection():
 
 
 root = tk.Tk()
-root.title("IGS数据发送工具")
-root.geometry("600x550")
+root.title("IGS数据发送工具 v1.0.0")
+root.geometry("700x580")
 root.protocol("ON_CLOSE", on_closing)
 
-text_area = scrolledtext.ScrolledText(root, width=70, height=22)
+text_area = scrolledtext.ScrolledText(root, width=80, height=22)
 text_area.pack(padx=10, pady=10)
 text_area.config(yscrollcommand=on_text_scroll)
 
+file_frame = tk.Frame(root)
+file_frame.pack(pady=5)
+
+lbl_file_title = tk.Label(file_frame, text="Excel文件:")
+lbl_file_title.pack(side=tk.LEFT, padx=5)
+
+lbl_file = tk.Label(file_frame, text="未选择", fg="gray")
+lbl_file.pack(side=tk.LEFT, padx=5)
+
+btn_select = tk.Button(file_frame, text="选择文件", command=select_excel)
+btn_select.pack(side=tk.LEFT, padx=5)
+
 frame = tk.Frame(root)
 frame.pack(pady=5)
+
+lbl_channel = tk.Label(frame, text="通道名:")
+lbl_channel.pack(side=tk.LEFT, padx=5)
+entry_channel = tk.Entry(frame, width=10)
+entry_channel.insert(0, CHANNEL_NAME)
+entry_channel.pack(side=tk.LEFT, padx=5)
+
+lbl_device = tk.Label(frame, text="设备名:")
+lbl_device.pack(side=tk.LEFT, padx=5)
+entry_device = tk.Entry(frame, width=10)
+entry_device.insert(0, DEVICE_NAME)
+entry_device.pack(side=tk.LEFT, padx=5)
 
 lbl_interval = tk.Label(frame, text="写入间隔(秒):")
 lbl_interval.pack(side=tk.LEFT, padx=5)
@@ -221,12 +263,9 @@ btn_resume.pack(side=tk.LEFT, padx=5)
 lbl_info = tk.Label(frame, text="控制: stop.txt=停止")
 lbl_info.pack(side=tk.LEFT, padx=20)
 
-lbl_status = tk.Label(frame, text="状态: 等待连接...", fg="orange")
+lbl_status = tk.Label(frame, text="状态: 请选择Excel文件", fg="gray")
 lbl_status.pack(side=tk.LEFT, padx=20)
 
-root.update()
-
-log("正在连接OPC服务器...")
-threading.Thread(target=init_connection, daemon=True).start()
+log("请选择Excel文件以开始")
 
 root.mainloop()
